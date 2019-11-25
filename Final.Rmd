@@ -14,3 +14,277 @@ library(survey)
 library(tidyverse)
 ```
 
+### Data Preparation
+```{r}
+cancer_df = read_csv("cancerxx.csv") %>% 
+  janitor::clean_names() %>% 
+  select(hhx, fmx, fpx, #identifiers
+         wtfa_sa, #weights
+         strat_p, psu_p, #for design
+         region, 
+         psahad, #ever has a psa test
+         rpsa1_mt, #month of most recent psa test
+         rpsa1n:psaexp)
+
+fam_dat = read_csv("familyxx.csv") %>%
+    janitor::clean_names() %>% 
+    select(hhx, fmx,  #identifiers
+         rat_cat4, rat_cat5) # Ratio of family income to the poverty threshold (not sure the difference)
+
+pers_dat = read_csv("personsx.csv") %>%
+   janitor::clean_names() %>% 
+    select(hhx, fmx, fpx, #identifiers
+         age_p, #age
+         educ1, #education
+         sex, #gender
+         notcov, cover, cover65, cover65o,  #coverage > 65, 65+, alternate 65+
+         la1ar, #limitation
+         lcondrt, #limitation is chronic
+         lachronr, #chronic limitation
+         hiscodi3, #ethnicity recode,
+         racreci3)#race recode
+
+adult_dat = read_csv("samadult.csv") %>%
+   janitor::clean_names() %>% 
+  select(hhx, fmx, fpx, #identifiers
+    ausualpl, ahcplrou, ahcplknd, #Usual source of care - different options
+    fla1ar) #functional limitation
+```
+
+```{r}
+psa_df = cancer_df %>% 
+  left_join(adult_dat, by = c("hhx", "fmx", "fpx")) %>% 
+  left_join(pers_dat, by = c("hhx", "fmx", "fpx")) %>% 
+  left_join(fam_dat, by = c("hhx", "fmx"))
+head(psa_df)
+```
+
+### EDA
+
+Count of people who has PSA before by times:
+
+```{r}
+psa_df %>% 
+  count(psahad)
+```
+
+```{r}
+psa_df = psa_df %>% 
+  mutate(age_cat = case_when(age_p >= 25 & age_p < 40 ~ "25–39",
+                              age_p >= 40 & age_p < 50 ~ "40–49",
+                              age_p >= 50 & age_p < 65 ~ "50–64",
+                              age_p >= 65 ~ "65+"))
+
+```
+
+```{r}
+psa_df=psa_df %>% 
+  mutate(educ_cat = case_when(educ1 < 13 ~ "Less than high school",
+                              educ1 >= 13 & educ1 < 15 ~ "High school",
+                              educ1 >= 15 & educ1 < 18 ~ "Some college",
+                              educ1 >= 18 & educ1 <= 21 ~ "College graduate"))
+
+```
+
+```{r}
+psa_df=psa_df %>% 
+  mutate(finc_cat = case_when(rat_cat5 <= 7 |  rat_cat5 %in% c(15, 16) ~ "<200%",
+                              rat_cat5 %in% c(8, 9) ~ "200–299%", 
+                              rat_cat5 %in% c(10, 11) ~ "300–399%",
+                              rat_cat5 >= 18 & educ1 <= 21 ~ "400–499%",
+                              rat_cat5 == 14  ~">=500%",
+                              rat_cat5 == 17  ~">=200%, no further detail",
+                              rat_cat5 %in% c(96, 99) ~ "Unknown"))
+
+```
+
+```{r}
+psa_df = psa_df %>% 
+  mutate(ausualpl_cat  = case_when(ausualpl == 2 ~ "No",
+                                 ausualpl %in% c(1, 3) ~ "Yes",
+                                 ausualpl %in% c(7, 8, 9) ~ "Other"))
+
+```
+
+```{r}
+psa_df <- psa_df %>% 
+  mutate(cover_cat  = case_when(notcov == 1 | cover == 4 | cover65 == 6 ~ "None",
+                                cover == 2 | cover65 %in% 2:4 ~ "Public",
+                                cover %in% c(1, 3) | cover65 %in% c(1, 5) ~ "Private/Military"))
+
+```
+
+```{r}
+psa_df <- psa_df %>% 
+  mutate(lcond_chronic_cat = if_else(lcondrt == 1, "Yes", "No"))
+
+```
+
+```{r}
+psa_df <- psa_df %>% 
+  mutate(race_cat = case_when(racreci3 == 1 ~ "White",
+                              racreci3 == 2 ~ "Black",
+                              racreci3 == 3 ~ "Asian",
+                              racreci3 == 4 ~ "AN/AI"),
+         eth_cat = case_when(hiscodi3 == 1 ~ "Hispanic",
+                             hiscodi3 == 2 ~ "Non-Hispanic White",
+                             hiscodi3 == 3 ~ "Non-Hispanic Black",
+                             hiscodi3 == 4 ~ "Non-Hispanic Asian",
+                             hiscodi3 == 5 ~ "Non-Hispanic AN/AI"))
+
+```
+
+```{r}
+psa_df =
+  psa_df %>%
+  filter(sex==1)
+```
+
+### Survey design
+
+```{r}
+psa_df %>% count(rpsa1_mt)
+
+psa_df = 
+  psa_df %>% 
+  mutate(psa_1yr = case_when(rpsa1_mt %in% c(1:12) ~ 1,
+                             rpsa1_mt %in% c(96,97,99) ~ 0))
+
+psa_df %>% count(psa_1yr)
+
+des <- svydesign(ids = ~psu_p, strata = ~strat_p, weights = ~wtfa_sa, nest = TRUE, data = psa_df)
+```
+### unstratified descriptive stats
+
+```{r}
+age_pct = svyby(~psa_1yr, by = ~age_cat, svymean, na.rm = TRUE, design = des)
+age_pct %>% knitr::kable()
+```
+
+```{r}
+age_tot = svyby(~psa_1yr, by = ~age_cat, svytotal, na.rm = TRUE, design = des)
+age_tot  %>% knitr::kable()
+```
+
+```{r}
+edu_pct = svyby(~psa_1yr, by = ~educ_cat, svymean, na.rm = TRUE, design = des)
+edu_pct %>% knitr::kable()
+edu_tot = svyby(~psa_1yr, by = ~educ_cat, svytotal, na.rm = TRUE, design = des)
+edu_tot %>% knitr::kable()
+```
+
+```{r}
+finc_pct = svyby(~psa_1yr, by = ~finc_cat, svymean, na.rm = TRUE, design = des)
+finc_pct  %>% knitr::kable()
+finc_tot = svyby(~psa_1yr, by = ~finc_cat, svytotal, na.rm = TRUE, design = des)
+finc_tot %>% knitr::kable()
+```
+
+```{r}
+ausualp_pct <- svyby(~psa_1yr, by = ~ausualpl_cat, svymean, na.rm = TRUE, design = des)
+ausualp_pct %>% knitr::kable()
+ausualp_tot <- svyby(~psa_1yr, by = ~ausualpl_cat, svytotal, na.rm = TRUE, design = des)
+ausualp_tot %>% knitr::kable()
+```
+
+```{r}
+cover_pct <- svyby(~psa_1yr, by = ~cover_cat, svymean, na.rm = TRUE, design = des)
+cover_pct %>% knitr::kable()
+cover_tot <- svyby(~psa_1yr, by = ~cover_cat, svytotal, na.rm = TRUE, design = des)
+cover_tot %>% knitr::kable()
+
+```
+
+```{r}
+lcond_chronic_pct <- svyby(~psa_1yr, by = ~lcond_chronic_cat, svymean, na.rm = TRUE, design = des)
+lcond_chronic_pct %>% knitr::kable()
+lcond_chronic_tot <- svyby(~psa_1yr, by = ~lcond_chronic_cat, svytotal, na.rm = TRUE, design = des)
+lcond_chronic_tot %>% knitr::kable()
+```
+
+```{r}
+race_pct <- svyby(~psa_1yr, by = ~race_cat, svymean, na.rm = TRUE, design = des)
+race_pct %>% knitr::kable()
+race_tot <- svyby(~psa_1yr, by = ~race_cat, svytotal, na.rm = TRUE, design = des)
+race_tot %>% knitr::kable()
+```
+
+```{r}
+eth_pct <- svyby(~psa_1yr, by = ~eth_cat, svymean, na.rm = TRUE, design = des)
+eth_pct %>% knitr::kable()
+eth_tot <- svyby(~psa_1yr, by = ~eth_cat, svytotal, na.rm = TRUE, design = des)
+eth_tot %>% knitr::kable()
+```
+
+### Statified design
+
+```{r}
+edu_pct_strat <- svyby(~psa_1yr, by = ~age_cat+educ_cat, svymean, na.rm = TRUE, design = des)
+edu_pct_strat %>% knitr::kable()
+```
+
+```{r}
+edu_tot_strat <- svyby(~psa_1yr, by = ~age_cat+educ_cat, svytotal, na.rm = TRUE, design = des)
+edu_tot_strat %>% knitr::kable()
+```
+
+```{r}
+finc_pct_strat <- svyby(~psa_1yr, by = ~age_cat+finc_cat, svymean, na.rm = TRUE, design = des)
+finc_pct_strat  %>% knitr::kable()
+```
+
+```{r}
+finc_tot_strat <- svyby(~psa_1yr, by = ~age_cat+finc_cat, svytotal, na.rm = TRUE, design = des)
+finc_tot_strat %>% knitr::kable()
+```
+
+```{r}
+ausualp_pct_strat <- svyby(~psa_1yr, by = ~age_cat+ausualpl_cat, svymean, na.rm = TRUE, design = des)
+ausualp_pct_strat %>% knitr::kable()
+```
+
+```{r}
+ausualp_tot_strat <- svyby(~psa_1yr, by = ~age_cat+ausualpl_cat, svytotal, na.rm = TRUE, design = des)
+ausualp_tot_strat %>% knitr::kable()
+```
+
+```{r}
+cover_pct_strat <- svyby(~psa_1yr, by = ~age_cat+cover_cat, svymean, na.rm = TRUE, design = des)
+cover_pct_strat %>% knitr::kable()
+```
+
+```{r}
+cover_tot_strat <- svyby(~psa_1yr, by = ~age_cat+cover_cat, svytotal, na.rm = TRUE, design = des)
+cover_tot_strat %>% knitr::kable()
+```
+
+```{r}
+lcond_chronic_pct_strat <- svyby(~psa_1yr, by = ~age_cat+lcond_chronic_cat, svymean, na.rm = TRUE, design = des)
+lcond_chronic_pct_strat %>% knitr::kable()
+```
+
+```{r}
+lcond_chronic_tot_strat <- svyby(~psa_1yr, by = ~age_cat+lcond_chronic_cat, svytotal, na.rm = TRUE, design = des)
+lcond_chronic_tot_strat %>% knitr::kable()
+```
+
+```{r}
+race_pct_strat <- svyby(~psa_1yr, by = ~age_cat+race_cat, svymean, na.rm = TRUE, design = des)
+race_pct_strat %>% knitr::kable()
+```
+
+```{r}
+race_tot_strat <- svyby(~psa_1yr, by = ~age_cat+race_cat, svytotal, na.rm = TRUE, design = des)
+race_tot_strat %>% knitr::kable()
+```
+
+```{r}
+eth_pct_strat <- svyby(~psa_1yr, by = ~age_cat+eth_cat, svymean, na.rm = TRUE, design = des)
+eth_pct_strat %>% knitr::kable()
+```
+
+```{r}
+eth_tot_strat <- svyby(~psa_1yr, by = ~age_cat+eth_cat, svytotal, na.rm = TRUE, design = des)
+eth_tot_strat %>% knitr::kable()
+```
+
