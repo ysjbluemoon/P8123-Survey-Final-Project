@@ -398,7 +398,7 @@ tot_tab2 = tot_tab %>%
          level = "-")
 # education
 edu_pct2 = edu_pct %>%
-  mutate(age_cat = "40+")
+  mutate(age_cat = "50+")
 edu_tab = rbind(edu_pct2, edu_tab)
 # factor levels for presentation
 edu_tab2 = edu_tab %>%
@@ -553,6 +553,7 @@ model1 = svyglm(psa_1yr ~ as.factor(age_cat) + as.factor(educ_cat) + as.factor(f
 summary(model1)
 summ(model1) 
   
+
 regTermTest(model1,  ~ as.factor(age_cat) + as.factor(educ_cat) + as.factor(finc_cat2) + as.factor(ausualpl_cat2) + as.factor(cover_cat) + as.factor(lcond_chronic_cat2) + as.factor(race_cat) + as.factor(eth_cat2) + as.factor(imm_stat2),
             method = "LRT")
 
@@ -621,4 +622,8 @@ model_coef %>% knitr::kable(digits = 2)
 jtools::plot_summs(model2, coefs = coef1, exp = TRUE) +
   labs(title = "PSA Significant Predictors") 
 ```
+
+```{r}
+write.csv(psa_df, "psa.csv")
 ```
+
